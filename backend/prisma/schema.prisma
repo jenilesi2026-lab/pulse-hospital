@@ -1,0 +1,152 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ─────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  RECEPTIONIST
+  DOCTOR
+  PATIENT
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum StaffType {
+  NURSE
+  SUPPORT_STAFF
+}
+
+// ─── Models ────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(PATIENT)
+  phone        String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  appointments Appointment[] @relation("CreatedByUser")
+
+  @@map("users")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  name        String
+  description String?
+  iconName    String?  // Lucide icon name, e.g. "Brain"
+  color       String?  // Tailwind color name, e.g. "blue"
+  createdAt   DateTime @default(now())
+
+  doctors Doctor[]
+
+  @@map("departments")
+}
+
+model Doctor {
+  id           String   @id @default(uuid())
+  name         String
+  speciality   String
+  degrees      String
+  languages    String[] // PostgreSQL text[]
+  imageUrl     String?
+  workplace    String   @default("Pulse Life Care Hospital, Mumbai")
+  fee          Int      // in INR
+  experience   Int?     // e.g. 12
+  bmdcNumber   String?
+  joinedDate   DateTime?
+  rating       Float    @default(5.0)
+  ratingCount  Int      @default(0)
+  bio          String?
+  diseases     String[] // specialised diseases treated
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  appointments Appointment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("doctors")
+}
+
+model Staff {
+  id           String    @id @default(uuid())
+  name         String
+  role         String    // e.g. "Head Nurse - ICU"
+  type         StaffType
+  qualification String?  // for nurses
+  department   String?   // plain string dept name for support staff
+  languages    String[]
+  imageUrl     String?
+  workplace    String    @default("Pulse Life Care Hospital, Mumbai")
+  experience   Int?
+  joinedDate   DateTime?
+  rating       Float?
+  ratingCount  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("staff")
+}
+
+model Appointment {
+  id     String            @id @default(uuid())
+  status AppointmentStatus @default(PENDING)
+
+  // Doctor reference
+  doctorId String
+  doctor   Doctor @relation(fields: [doctorId], references: [id])
+
+  // Optional: link to logged-in user
+  createdByUserId String?
+  createdByUser   User?   @relation("CreatedByUser", fields: [createdByUserId], references: [id])
+
+  // Patient details (captured in form; user may not have an account)
+  fullName       String
+  dob            DateTime
+  gender         String
+  bloodGroup     String
+  phone          String
+  email          String?
+  address        String
+  city           String
+  pincode        String
+  emergencyName  String
+  emergencyPhone String
+  symptoms       String
+  allergies      String?
+  history        String? // past medical history
+
+  // Appointment slot
+  appointmentDate DateTime // full ISO datetime (date + time combined)
+
+  feeAmount Int? // captured at time of booking (doctor.fee snapshot)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Prevent double-booking the same doctor at the same slot
+  @@unique([doctorId, appointmentDate])
+  @@map("appointments")
+}

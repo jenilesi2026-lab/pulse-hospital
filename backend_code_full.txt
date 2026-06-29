@@ -1,0 +1,1679 @@
+﻿==== C:\Users\Jenil\OneDrive\Desktop\new\backend\prisma\schema.prisma ====
+
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// â”€â”€â”€ Enums â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+enum Role {
+  ADMIN
+  RECEPTIONIST
+  DOCTOR
+  PATIENT
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum StaffType {
+  NURSE
+  SUPPORT_STAFF
+}
+
+// â”€â”€â”€ Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(PATIENT)
+  phone        String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  appointments Appointment[] @relation("CreatedByUser")
+
+  @@map("users")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  name        String
+  description String?
+  iconName    String?  // Lucide icon name, e.g. "Brain"
+  color       String?  // Tailwind color name, e.g. "blue"
+  createdAt   DateTime @default(now())
+
+  doctors Doctor[]
+
+  @@map("departments")
+}
+
+model Doctor {
+  id           String   @id @default(uuid())
+  name         String
+  speciality   String
+  degrees      String
+  languages    String[] // PostgreSQL text[]
+  imageUrl     String?
+  workplace    String   @default("Pulse Life Care Hospital, Mumbai")
+  fee          Int      // in INR
+  experience   Int?     // e.g. 12
+  bmdcNumber   String?
+  joinedDate   DateTime?
+  rating       Float    @default(5.0)
+  ratingCount  Int      @default(0)
+  bio          String?
+  diseases     String[] // specialised diseases treated
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  appointments Appointment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("doctors")
+}
+
+model Staff {
+  id           String    @id @default(uuid())
+  name         String
+  role         String    // e.g. "Head Nurse - ICU"
+  type         StaffType
+  qualification String?  // for nurses
+  department   String?   // plain string dept name for support staff
+  languages    String[]
+  imageUrl     String?
+  workplace    String    @default("Pulse Life Care Hospital, Mumbai")
+  experience   Int?
+  joinedDate   DateTime?
+  rating       Float?
+  ratingCount  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("staff")
+}
+
+model Appointment {
+  id     String            @id @default(uuid())
+  status AppointmentStatus @default(PENDING)
+
+  // Doctor reference
+  doctorId String
+  doctor   Doctor @relation(fields: [doctorId], references: [id])
+
+  // Optional: link to logged-in user
+  createdByUserId String?
+  createdByUser   User?   @relation("CreatedByUser", fields: [createdByUserId], references: [id])
+
+  // Patient details (captured in form; user may not have an account)
+  fullName       String
+  dob            DateTime
+  gender         String
+  bloodGroup     String
+  phone          String
+  email          String?
+  address        String
+  city           String
+  pincode        String
+  emergencyName  String
+  emergencyPhone String
+  symptoms       String
+  allergies      String?
+  history        String? // past medical history
+
+  // Appointment slot
+  appointmentDate DateTime // full ISO datetime (date + time combined)
+
+  feeAmount Int? // captured at time of booking (doctor.fee snapshot)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Prevent double-booking the same doctor at the same slot
+  @@unique([doctorId, appointmentDate])
+  @@map("appointments")
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\prisma\seed.js ====
+
+// prisma/seed.js
+import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
+
+const prisma = new PrismaClient();
+
+async function main() {
+  console.log("ðŸŒ± Seeding database...");
+
+  // â”€â”€â”€ 1. Admin User â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const adminHash = await bcrypt.hash("admin123", 10);
+  const admin = await prisma.user.upsert({
+    where: { email: "admin@pulselife.com" },
+    update: {},
+    create: {
+      name: "Hospital Admin",
+      email: "admin@pulselife.com",
+      passwordHash: adminHash,
+      role: "ADMIN",
+      phone: "9000000000",
+    },
+  });
+  console.log("âœ… Admin created:", admin.email);
+
+  // Demo patient user
+  const patientHash = await bcrypt.hash("patient123", 10);
+  await prisma.user.upsert({
+    where: { email: "patient@example.com" },
+    update: {},
+    create: {
+      name: "Demo Patient",
+      email: "patient@example.com",
+      passwordHash: patientHash,
+      role: "PATIENT",
+      phone: "9111111111",
+    },
+  });
+  console.log("âœ… Demo patient created");
+
+  // â”€â”€â”€ 2. Departments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const departmentsData = [
+    { slug: "neurology",       name: "Brain & Mental Health",  description: "Advanced care for brain, nervous system, and mental health.", iconName: "Brain",       color: "blue"    },
+    { slug: "ophthalmology",   name: "Eye Care & Vision",      description: "Expert eye care and vision correction surgeries.",             iconName: "Eye",        color: "cyan"    },
+    { slug: "endocrinology",   name: "Thyroid & Hormones",     description: "Treatment for thyroid, diabetes, and hormonal imbalances.",    iconName: "ShieldCheck", color: "purple"  },
+    { slug: "pulmonology",     name: "Lungs & Breathing",      description: "Specialized care for lungs and respiratory conditions.",       iconName: "Wind",        color: "sky"     },
+    { slug: "cardiology",      name: "Heart Care",             description: "Comprehensive care for heart and vascular diseases.",          iconName: "Heart",       color: "rose"    },
+    { slug: "gastroenterology",name: "Stomach & Digestion",    description: "Digestive system, stomach, and liver disease treatments.",     iconName: "Stethoscope", color: "orange"  },
+    { slug: "nephrology",      name: "Kidneys & Urinary",      description: "Kidney care and urinary tract treatments.",                   iconName: "Droplet",     color: "yellow"  },
+    { slug: "gynaecology",     name: "Women's Health",         description: "Women's health, pregnancy, and reproductive care.",           iconName: "User",        color: "pink"    },
+    { slug: "orthopaedics",    name: "Bones & Joints",         description: "Expert treatment for bone, joint, and muscle conditions.",    iconName: "Bone",        color: "emerald" },
+    { slug: "dermatology",     name: "Skin & Cosmetic",        description: "Skin care, aesthetics, and reconstructive surgery.",          iconName: "ShieldCheck", color: "amber"   },
+    { slug: "oncology",        name: "Cancer Care",            description: "Comprehensive cancer care and pediatric oncology.",           iconName: "Activity",    color: "red"     },
+    { slug: "psychiatry",      name: "Mental Health",          description: "Mental health and psychiatric care.",                         iconName: "Brain",       color: "violet"  },
+    { slug: "urology",         name: "Urology",                description: "Treatment for urinary and male reproductive conditions.",     iconName: "Droplet",     color: "teal"    },
+    { slug: "rheumatology",    name: "Rheumatology",           description: "Arthritis and autoimmune disease care.",                      iconName: "Bone",        color: "lime"    },
+    { slug: "plastic-surgery", name: "Plastic Surgery",        description: "Reconstructive and cosmetic surgical procedures.",           iconName: "ShieldCheck", color: "pink"    },
+    { slug: "pediatrics",      name: "Pediatrics",             description: "Specialized medical care for children and newborns.",         iconName: "Users",       color: "green"   },
+  ];
+
+  const deptMap = {}; // slug -> id
+  for (const d of departmentsData) {
+    const dept = await prisma.department.upsert({
+      where: { slug: d.slug },
+      update: {},
+      create: d,
+    });
+    deptMap[d.slug] = dept.id;
+  }
+  console.log("âœ… Departments seeded:", Object.keys(deptMap).length);
+
+  // â”€â”€â”€ 3. Doctors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const doctorsData = [
+    {
+      name: "Dr. Anjali Sharma",      speciality: "Cardiothoracic Surgery",     departmentSlug: "cardiology",
+      degrees: "MBBS, MS, MCh (Cardio Thoracic Surgery)", languages: ["English", "Hindi", "Marathi"],
+      imageUrl: "https://i.pinimg.com/736x/ad/6c/b0/ad6cb07e44a5e63ffc89d7723b181052.jpg",
+      fee: 800,  experience: "12+ Years", bmdcNumber: "84220", rating: 5.0, ratingCount: 5512,
+      joinedDate: new Date("2021-09-26"),
+      diseases: ["Heart Disease", "Valve Repair", "Bypass Surgery"],
+    },
+    {
+      name: "Dr. Rajesh Iyer",        speciality: "Neurology",                  departmentSlug: "neurology",
+      degrees: "MBBS, MD (Medicine), DM (Neurology)", languages: ["English", "Tamil", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/11/13/21/111321d846eef0721e0c2059f4b2509c.jpg",
+      fee: 1000, experience: "15+ Years", bmdcNumber: "78911", rating: 4.9, ratingCount: 4820,
+      joinedDate: new Date("2019-03-12"),
+      diseases: ["Epilepsy", "Migraine", "Parkinson's", "Stroke"],
+    },
+    {
+      name: "Dr. Sneha Desai",        speciality: "Pediatric Oncology",         departmentSlug: "pediatrics",
+      degrees: "MBBS, MD (Pediatrics), Fellowship in Oncology", languages: ["English", "Gujarati", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/26/40/9f/26409f5a30e3603e7819c84b2b3b5ad9.jpg",
+      fee: 900,  experience: "10+ Years", bmdcNumber: "90233", rating: 5.0, ratingCount: 3120,
+      joinedDate: new Date("2022-01-05"),
+      diseases: ["Childhood Cancer", "Leukemia"],
+    },
+    {
+      name: "Dr. Vikram Singh",       speciality: "Orthopaedics",               departmentSlug: "orthopaedics",
+      degrees: "MBBS, MS (Orthopaedics), FRCS", languages: ["English", "Hindi", "Punjabi"],
+      imageUrl: "https://i.pinimg.com/1200x/4c/ee/6c/4cee6c22feeb033e76f96c293c48bb0a.jpg",
+      fee: 850,  experience: "14+ Years", bmdcNumber: "67455", rating: 4.8, ratingCount: 6210,
+      joinedDate: new Date("2018-07-18"),
+      diseases: ["Joint Replacement", "Fractures", "Sports Injuries"],
+    },
+    {
+      name: "Dr. Meera Reddy",        speciality: "Obstetrics & Gynecology",    departmentSlug: "gynaecology",
+      degrees: "MBBS, MD (OBG), MRCOG", languages: ["English", "Telugu", "Kannada"],
+      imageUrl: "https://i.pinimg.com/736x/4a/de/6d/4ade6d2a43e9bdf4cb20cf1dc05def79.jpg",
+      fee: 950,  experience: "11+ Years", bmdcNumber: "81200", rating: 4.9, ratingCount: 4015,
+      joinedDate: new Date("2020-11-22"),
+      diseases: ["Pregnancy", "PCOS", "Infertility"],
+    },
+    {
+      name: "Dr. Aditya Menon",       speciality: "Gastroenterology",           departmentSlug: "gastroenterology",
+      degrees: "MBBS, MD, DM (Gastroenterology)", languages: ["English", "Malayalam", "Hindi"],
+      imageUrl: "https://i.pinimg.com/1200x/76/27/0a/76270a3a64daf1fc55424eed6f2cf00a.jpg",
+      fee: 1100, experience: "13+ Years", bmdcNumber: "73622", rating: 4.7, ratingCount: 2890,
+      joinedDate: new Date("2019-02-09"),
+      diseases: ["IBS", "Liver Disease", "Ulcers"],
+    },
+    {
+      name: "Dr. Kavita Banerjee",    speciality: "Dermatology",                departmentSlug: "dermatology",
+      degrees: "MBBS, MD (Dermatology & Venereology)", languages: ["English", "Bengali", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/a0/2c/fb/a02cfb3c7982465c2da06d90bcf2dd02.jpg",
+      fee: 700,  experience: "9+ Years",  bmdcNumber: "88541", rating: 5.0, ratingCount: 5340,
+      joinedDate: new Date("2021-08-14"),
+      diseases: ["Acne", "Eczema", "Psoriasis", "Skin Cancer"],
+    },
+    {
+      name: "Dr. Sanjay Patel",       speciality: "Nephrology",                 departmentSlug: "nephrology",
+      degrees: "MBBS, MD, DM (Nephrology), FASN", languages: ["English", "Gujarati", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/21/4b/23/214b230635d0c066a57db357c6902483.jpg",
+      fee: 1050, experience: "16+ Years", bmdcNumber: "65120", rating: 4.8, ratingCount: 7100,
+      joinedDate: new Date("2017-05-30"),
+      diseases: ["Kidney Failure", "Dialysis", "Kidney Stones"],
+    },
+    {
+      name: "Dr. Priya Kadam",        speciality: "Endocrinology",              departmentSlug: "endocrinology",
+      degrees: "MBBS, MD (Medicine), DM (Endocrinology)", languages: ["English", "Marathi", "Hindi"],
+      imageUrl: "https://i.pinimg.com/1200x/fe/0c/ba/fe0cba212ae98329e562f17b19c147d1.jpg",
+      fee: 900,  experience: "10+ Years", bmdcNumber: "91002", rating: 4.9, ratingCount: 2450,
+      joinedDate: new Date("2022-04-03"),
+      diseases: ["Diabetes", "Thyroid", "Hormonal Imbalance"],
+    },
+    {
+      name: "Dr. Arun Kumar",         speciality: "Pulmonology",                departmentSlug: "pulmonology",
+      degrees: "MBBS, MD (Pulmonary Medicine), FCCP", languages: ["English", "Hindi", "Bhojpuri"],
+      imageUrl: "https://i.pinimg.com/736x/7c/b6/e4/7cb6e4622063bc1fc06a9c3281f439d0.jpg",
+      fee: 800,  experience: "12+ Years", bmdcNumber: "79330", rating: 4.7, ratingCount: 3600,
+      joinedDate: new Date("2019-10-20"),
+      diseases: ["Asthma", "COPD", "Tuberculosis"],
+    },
+    {
+      name: "Dr. Ritu Verma",         speciality: "Psychiatry",                 departmentSlug: "psychiatry",
+      degrees: "MBBS, MD (Psychiatry), DPM", languages: ["English", "Hindi"],
+      imageUrl: "https://i.pinimg.com/1200x/a8/72/5a/a8725a458327278bd2c3aae0dd474ad8.jpg",
+      fee: 950,  experience: "8+ Years",  bmdcNumber: "93450", rating: 5.0, ratingCount: 1980,
+      joinedDate: new Date("2022-06-11"),
+      diseases: ["Depression", "Anxiety", "Schizophrenia"],
+    },
+    {
+      name: "Dr. Rohan Das",          speciality: "Urology",                    departmentSlug: "urology",
+      degrees: "MBBS, MS (Surgery), MCh (Urology)", languages: ["English", "Bengali", "Hindi"],
+      imageUrl: "https://i.pinimg.com/1200x/82/fc/75/82fc75a6e1ffd447261b69c03c60372a.jpg",
+      fee: 1000, experience: "13+ Years", bmdcNumber: "70188", rating: 4.8, ratingCount: 4500,
+      joinedDate: new Date("2018-12-07"),
+      diseases: ["Kidney Stones", "Prostate", "Bladder Cancer"],
+    },
+    {
+      name: "Dr. Shweta Joshi",       speciality: "Rheumatology",               departmentSlug: "rheumatology",
+      degrees: "MBBS, MD (Medicine), DM (Rheumatology)", languages: ["English", "Marathi", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/fb/5a/02/fb5a0294b403e8440aa687ea94ed316c.jpg",
+      fee: 900,  experience: "9+ Years",  bmdcNumber: "86700", rating: 4.9, ratingCount: 2760,
+      joinedDate: new Date("2021-02-16"),
+      diseases: ["Arthritis", "Lupus", "Gout"],
+    },
+    {
+      name: "Dr. Manish Gupta",       speciality: "Ophthalmology",              departmentSlug: "ophthalmology",
+      degrees: "MBBS, MS (Ophthalmology), DO", languages: ["English", "Hindi", "Punjabi"],
+      imageUrl: "https://i.pinimg.com/1200x/eb/31/75/eb31750dbf64dd06d425d11774794a26.jpg",
+      fee: 750,  experience: "11+ Years", bmdcNumber: "82345", rating: 4.8, ratingCount: 3950,
+      joinedDate: new Date("2020-09-28"),
+      diseases: ["Cataract", "Glaucoma", "Diabetic Retinopathy"],
+    },
+    {
+      name: "Dr. Neha Agarwal",       speciality: "Plastic Surgery",            departmentSlug: "plastic-surgery",
+      degrees: "MBBS, MS, MCh (Plastic Surgery)", languages: ["English", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/c3/8e/de/c38ede58942b903f34297eb287e51524.jpg",
+      fee: 1200, experience: "14+ Years", bmdcNumber: "68900", rating: 5.0, ratingCount: 5600,
+      joinedDate: new Date("2018-03-02"),
+      diseases: ["Reconstructive Surgery", "Burns", "Cosmetic Surgery"],
+    },
+    {
+      name: "Dr. Tarun Chatterjee",   speciality: "Medical Oncology",           departmentSlug: "oncology",
+      degrees: "MBBS, MD (Medicine), DM (Medical Oncology)", languages: ["English", "Bengali", "Hindi"],
+      imageUrl: "https://i.pinimg.com/736x/30/f0/57/30f0570f5711c52346ed50f93e2f4e33.jpg",
+      fee: 1150, experience: "15+ Years", bmdcNumber: "64211", rating: 4.9, ratingCount: 6800,
+      joinedDate: new Date("2017-07-19"),
+      diseases: ["Blood Cancer", "Solid Tumors", "Chemotherapy"],
+    },
+  ];
+
+  for (const d of doctorsData) {
+    const { departmentSlug, ...rest } = d;
+    await prisma.doctor.upsert({
+      where: { bmdcNumber: rest.bmdcNumber ?? undefined },
+      update: {},
+      create: {
+        ...rest,
+        experience: parseInt(String(rest.experience), 10) || null,
+        departmentId: deptMap[departmentSlug],
+      },
+    }).catch(() => {}); // skip duplicate upsert issues
+  }
+  console.log("âœ… Doctors seeded:", doctorsData.length);
+
+  // â”€â”€â”€ 4. Nurses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const nursesData = [
+    { name: "Sister Anita Pillai",  role: "Head Nurse - ICU",           type: "NURSE", qualification: "B.Sc Nursing, Critical Care Certified",  languages: ["English", "Hindi", "Malayalam"], imageUrl: "https://i.pinimg.com/736x/03/35/37/033537ea8a2b3cd24fb3b816644bf5f9.jpg", experience: "14+ Years", joinedDate: new Date("2016-03-10"), rating: 4.9, ratingCount: 1240 },
+    { name: "Sister Reena Thomas",  role: "Senior Nurse - Cardiology",   type: "NURSE", qualification: "B.Sc Nursing, Cardiac Care",              languages: ["English", "Hindi", "Tamil"],      imageUrl: "https://i.pinimg.com/736x/54/82/85/54828523ad4647bd03b95257b557579c.jpg", experience: "11+ Years", joinedDate: new Date("2018-07-22"), rating: 4.8, ratingCount: 980  },
+    { name: "Sister Pooja Sharma",  role: "Staff Nurse - Pediatrics",    type: "NURSE", qualification: "GNM, Pediatric Nursing",                   languages: ["English", "Hindi", "Punjabi"],   imageUrl: "https://i.pinimg.com/1200x/69/d9/d5/69d9d5fb0658f36b2a50e427428c84af.jpg", experience: "8+ Years",  joinedDate: new Date("2020-01-05"), rating: 4.9, ratingCount: 760  },
+    { name: "Sister Fatima Khan",   role: "Senior Nurse - Maternity",    type: "NURSE", qualification: "B.Sc Nursing, Midwifery",                  languages: ["English", "Hindi", "Urdu"],      imageUrl: "https://i.pinimg.com/736x/96/16/c2/9616c2a5ed4b6ace9fa3b5b7f9f6767d.jpg", experience: "12+ Years", joinedDate: new Date("2017-08-18"), rating: 5.0, ratingCount: 1410 },
+    { name: "Sister Lakshmi Nair",  role: "Staff Nurse - Emergency",     type: "NURSE", qualification: "B.Sc Nursing, Trauma Care",                languages: ["English", "Hindi", "Malayalam"], imageUrl: "https://i.pinimg.com/1200x/eb/8b/ce/eb8bcec0e1526c6fd520c3c9a30b14e3.jpg", experience: "9+ Years",  joinedDate: new Date("2019-11-30"), rating: 4.7, ratingCount: 690  },
+    { name: "Sister Deepa Verma",   role: "Staff Nurse - General Ward",  type: "NURSE", qualification: "GNM Nursing",                              languages: ["English", "Hindi"],               imageUrl: "https://i.pinimg.com/736x/b2/50/eb/b250eb1de2e1585bc12c71a8713f06f0.jpg", experience: "7+ Years",  joinedDate: new Date("2021-02-14"), rating: 4.8, ratingCount: 540  },
+    { name: "Sister Joseph Mary",   role: "Senior Nurse - Oncology",     type: "NURSE", qualification: "B.Sc Nursing, Oncology Care",              languages: ["English", "Hindi", "Marathi"],  imageUrl: "https://i.pinimg.com/736x/27/40/fb/2740fb4abb4289c479a55de9d0596add.jpg", experience: "13+ Years", joinedDate: new Date("2016-06-09"), rating: 5.0, ratingCount: 1180 },
+    { name: "Sister Kiran Bedi",    role: "Staff Nurse - Orthopedics",   type: "NURSE", qualification: "GNM, Ortho Care",                          languages: ["English", "Hindi", "Haryanvi"],  imageUrl: "https://i.pinimg.com/736x/da/6d/84/da6d84f3dfcbf1ec09115af05c064a49.jpg", experience: "6+ Years",  joinedDate: new Date("2021-09-25"), rating: 4.7, ratingCount: 430  },
+  ];
+
+  for (const n of nursesData) {
+    await prisma.staff.create({ data: { ...n, experience: parseInt(String(n.experience), 10) || null } }).catch(() => {});
+  }
+  console.log("âœ… Nurses seeded:", nursesData.length);
+
+  // â”€â”€â”€ 5. Support Staff â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const peonsData = [
+    { name: "Ramesh Yadav",   role: "Ward Attendant",    type: "SUPPORT_STAFF", department: "ICU",          languages: ["Hindi", "Bhojpuri"],  imageUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&q=80", experience: "10+ Years", joinedDate: new Date("2016-04-12") },
+    { name: "Suresh Patil",   role: "Support Staff",     type: "SUPPORT_STAFF", department: "General Ward", languages: ["Hindi", "Marathi"],    imageUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&q=80", experience: "8+ Years",  joinedDate: new Date("2018-06-20") },
+    { name: "Mahesh Kumar",   role: "Stretcher Bearer",  type: "SUPPORT_STAFF", department: "Emergency",    languages: ["Hindi", "English"],   imageUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&q=80", experience: "6+ Years",  joinedDate: new Date("2020-03-03") },
+    { name: "Dinesh Gupta",   role: "Housekeeping Staff",type: "SUPPORT_STAFF", department: "OPD",          languages: ["Hindi"],              imageUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&q=80", experience: "12+ Years", joinedDate: new Date("2014-01-08") },
+    { name: "Rajan Singh",    role: "Ward Attendant",    type: "SUPPORT_STAFF", department: "Cardiology",   languages: ["Hindi", "Punjabi"],   imageUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&q=80", experience: "9+ Years",  joinedDate: new Date("2017-09-16") },
+    { name: "Vijay Sharma",   role: "Support Staff",     type: "SUPPORT_STAFF", department: "Pediatrics",   languages: ["Hindi", "English"],   imageUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&q=80", experience: "5+ Years",  joinedDate: new Date("2021-11-21") },
+    { name: "Anil Mishra",    role: "Stretcher Bearer",  type: "SUPPORT_STAFF", department: "Orthopedics",  languages: ["Hindi", "Bhojpuri"],  imageUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&q=80", experience: "7+ Years",  joinedDate: new Date("2019-05-11") },
+    { name: "Prakash Jadhav", role: "Housekeeping Staff",type: "SUPPORT_STAFF", department: "General Ward", languages: ["Hindi", "Marathi"],   imageUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&q=80", experience: "11+ Years", joinedDate: new Date("2015-02-02") },
+    { name: "Santosh Rao",    role: "Ward Attendant",    type: "SUPPORT_STAFF", department: "Maternity",    languages: ["Hindi", "Telugu"],    imageUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&q=80", experience: "8+ Years",  joinedDate: new Date("2018-07-29") },
+    { name: "Mukesh Verma",   role: "Support Staff",     type: "SUPPORT_STAFF", department: "Oncology",     languages: ["Hindi", "English"],   imageUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&q=80", experience: "6+ Years",  joinedDate: new Date("2020-10-17") },
+  ];
+
+  for (const p of peonsData) {
+    await prisma.staff.create({ data: { ...p, experience: parseInt(String(p.experience), 10) || null } }).catch(() => {});
+  }
+  console.log("âœ… Support staff seeded:", peonsData.length);
+
+  console.log("\nðŸŽ‰ Seeding complete!");
+  console.log("   Admin login  â†’ email: admin@pulselife.com  password: admin123");
+  console.log("   Patient loginâ†’ email: patient@example.com  password: patient123");
+}
+
+main()
+  .catch((e) => { console.error(e); process.exit(1); })
+  .finally(() => prisma.$disconnect());
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\scripts\backup.js ====
+
+import fs from 'fs';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+async function escapeString(str) {
+    if (str === null || str === undefined) return 'NULL';
+    if (typeof str === 'boolean') return str ? 'TRUE' : 'FALSE';
+    if (typeof str === 'number') return str;
+    if (str instanceof Date) return `'${str.toISOString()}'`;
+    return `'${String(str).replace(/'/g, "''")}'`;
+}
+
+async function backupTable(tableName, data) {
+    if (data.length === 0) return '';
+    const columns = Object.keys(data[0]);
+    let sql = `-- Data for Name: ${tableName}\n`;
+    
+    for (const row of data) {
+        const values = [];
+        for (const col of columns) {
+            values.push(await escapeString(row[col]));
+        }
+        sql += `INSERT INTO "${tableName}" ("${columns.join('", "')}") VALUES (${values.join(', ')});\n`;
+    }
+    return sql + '\n';
+}
+
+async function main() {
+    let sql = `-- Supabase Database Backup\n-- Generated on ${new Date().toISOString()}\n\n`;
+
+    const users = await prisma.user.findMany();
+    sql += await backupTable('users', users);
+
+    const departments = await prisma.department.findMany();
+    sql += await backupTable('departments', departments);
+
+    const doctors = await prisma.doctor.findMany();
+    sql += await backupTable('doctors', doctors);
+
+    const staff = await prisma.staff.findMany();
+    sql += await backupTable('staff', staff);
+
+    const appointments = await prisma.appointment.findMany();
+    sql += await backupTable('appointments', appointments);
+
+    fs.writeFileSync('C:\\Users\\Jenil\\OneDrive\\Desktop\\new\\supabase_backup.sql', sql);
+    console.log('Backup successful!');
+}
+
+main().catch(console.error).finally(() => prisma.$disconnect());
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\controllers\appointments.controller.js ====
+
+// src/controllers/appointments.controller.js
+import { prisma } from "../prisma.js";
+import { appointmentSchema, statusSchema } from "../utils/validators.js";
+
+/**
+ * Converts separate date and time strings into a single JS Date object.
+ * Forces IST (+05:30).
+ */
+function toISODateTime(dateStr, timeStr) {
+  return new Date(`${dateStr}T${timeStr}:00+05:30`);
+}
+
+/**
+ * POST /api/appointments   (protected â€” requires JWT)
+ * Books an appointment for the authenticated user.
+ * Prevents double-booking the same doctor at the same time slot.
+ */
+export async function createAppointment(req, res, next) {
+  try {
+    const data = appointmentSchema.parse(req.body);
+
+    // Verify doctor exists
+    const doctor = await prisma.doctor.findUnique({ where: { id: data.doctorId } });
+    if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+
+    // Combine date + time into a single DateTime
+    const appointmentDateTime = toISODateTime(data.appointmentDate, data.appointmentTime);
+
+    // Check for double booking â€” same doctor, same exact slot
+    const conflict = await prisma.appointment.findFirst({
+      where: {
+        doctorId: data.doctorId,
+        appointmentDate: appointmentDateTime,
+        status: { notIn: ["CANCELLED"] }, // cancelled slots can be re-booked
+      },
+    });
+    if (conflict) {
+      return res.status(409).json({
+        message: `This time slot is already booked. Please choose another time.`,
+      });
+    }
+
+    // Create the appointment
+    const appointment = await prisma.appointment.create({
+      data: {
+        doctorId:        data.doctorId,
+        createdByUserId: req.user?.sub || null, // link to user if authenticated
+        fullName:        data.fullName,
+        dob:             new Date(data.dob),
+        gender:          data.gender,
+        bloodGroup:      data.bloodGroup,
+        phone:           data.phone,
+        email:           data.email || null,
+        address:         data.address,
+        city:            data.city,
+        pincode:         data.pincode,
+        emergencyName:   data.emergencyName,
+        emergencyPhone:  data.emergencyPhone,
+        symptoms:        data.symptoms,
+        allergies:       data.allergies || null,
+        history:         data.history || null,
+        appointmentDate: appointmentDateTime,
+        feeAmount:       doctor.fee, // snapshot the fee at booking time
+      },
+      include: {
+        doctor: {
+          include: { department: { select: { name: true, slug: true } } },
+        },
+      },
+    });
+
+    res.status(201).json(appointment);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/appointments   (protected: ADMIN or RECEPTIONIST)
+ * Returns all appointments ordered by date (newest first)
+ */
+export async function listAppointments(req, res, next) {
+  try {
+    const { status, doctorId, date } = req.query;
+
+    const where = {};
+    if (status) where.status = status.toUpperCase();
+    if (doctorId) where.doctorId = doctorId;
+    if (date) {
+      const start = new Date(`${date}T00:00:00`);
+      const end   = new Date(`${date}T23:59:59`);
+      where.appointmentDate = { gte: start, lte: end };
+    }
+
+    const appointments = await prisma.appointment.findMany({
+      where,
+      orderBy: { appointmentDate: "desc" },
+      include: {
+        doctor: {
+          include: { department: { select: { name: true, slug: true } } },
+        },
+        createdByUser: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    res.json(appointments);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/appointments/:id   (protected)
+ * Returns a single appointment
+ */
+export async function getAppointment(req, res, next) {
+  try {
+    const appointment = await prisma.appointment.findUnique({
+      where: { id: req.params.id },
+      include: {
+        doctor: {
+          include: { department: true },
+        },
+        createdByUser: { select: { id: true, name: true, email: true } },
+      },
+    });
+    if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+    res.json(appointment);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/appointments/my   (protected: PATIENT)
+ * Returns appointments created by the currently logged-in user
+ */
+export async function myAppointments(req, res, next) {
+  try {
+    const appointments = await prisma.appointment.findMany({
+      where: { createdByUserId: req.user.sub },
+      orderBy: { appointmentDate: "desc" },
+      include: {
+        doctor: {
+          include: { department: { select: { name: true, slug: true } } },
+        },
+      },
+    });
+    res.json(appointments);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /api/appointments/:id/status   (protected: ADMIN or RECEPTIONIST)
+ * Updates the status of an appointment (PENDING â†’ CONFIRMED, CANCELLED, COMPLETED)
+ */
+export async function updateAppointmentStatus(req, res, next) {
+  try {
+    const { status } = statusSchema.parse(req.body);
+
+    const updated = await prisma.appointment.update({
+      where: { id: req.params.id },
+      data: { status },
+      include: { doctor: true },
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\controllers\auth.controller.js ====
+
+// src/controllers/auth.controller.js
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { prisma } from "../prisma.js";
+import { loginSchema, registerSchema } from "../utils/validators.js";
+
+/**
+ * POST /api/auth/register
+ * Create a new user account (anyone can self-register as PATIENT)
+ */
+export async function register(req, res, next) {
+  try {
+    const data = registerSchema.parse(req.body);
+
+    // Check if email already exists
+    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    if (existing) {
+      return res.status(409).json({ message: "Email already registered" });
+    }
+
+    const passwordHash = await bcrypt.hash(data.password, 12);
+
+    const user = await prisma.user.create({
+      data: {
+        name: data.name,
+        email: data.email,
+        passwordHash,
+        phone: data.phone || null,
+        role: data.role || "PATIENT",
+      },
+      select: { id: true, name: true, email: true, role: true, phone: true, createdAt: true },
+    });
+
+    const token = signToken(user);
+
+    res.status(201).json({ token, user });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/auth/login
+ * Returns { token, user }
+ */
+export async function login(req, res, next) {
+  try {
+    const { email, password } = loginSchema.parse(req.body);
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const token = signToken(user);
+
+    res.json({
+      token,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/auth/me  (protected)
+ * Returns the currently authenticated user's profile
+ */
+export async function me(req, res, next) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.sub },
+      select: { id: true, name: true, email: true, role: true, phone: true, createdAt: true },
+    });
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.json({ user });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// â”€â”€â”€ Helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function signToken(user) {
+  return jwt.sign(
+    { sub: user.id, role: user.role, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+  );
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\controllers\departments.controller.js ====
+
+// src/controllers/departments.controller.js
+import { prisma } from "../prisma.js";
+
+/**
+ * GET /api/departments
+ * Returns all departments ordered by name
+ */
+export async function listDepartments(req, res, next) {
+  try {
+    const departments = await prisma.department.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        _count: { select: { doctors: true } }, // include doctor count
+      },
+    });
+    res.json(departments);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/departments/:slug
+ * Returns a single department by slug
+ */
+export async function getDepartmentBySlug(req, res, next) {
+  try {
+    const dept = await prisma.department.findUnique({
+      where: { slug: req.params.slug },
+      include: {
+        _count: { select: { doctors: true } },
+      },
+    });
+    if (!dept) return res.status(404).json({ message: "Department not found" });
+    res.json(dept);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/departments/:slug/doctors
+ * Returns all doctors belonging to this department
+ */
+export async function listDoctorsByDepartment(req, res, next) {
+  try {
+    const dept = await prisma.department.findUnique({
+      where: { slug: req.params.slug },
+      select: { id: true, name: true },
+    });
+    if (!dept) return res.status(404).json({ message: "Department not found" });
+
+    const doctors = await prisma.doctor.findMany({
+      where: { departmentId: dept.id },
+      orderBy: { name: "asc" },
+    });
+
+    res.json({ department: dept, doctors });
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\controllers\doctors.controller.js ====
+
+// src/controllers/doctors.controller.js
+import { prisma } from "../prisma.js";
+
+/**
+ * GET /api/doctors?department=slug&search=name
+ * Returns all doctors with optional filtering by department slug or name search
+ */
+export async function listDoctors(req, res, next) {
+  try {
+    const { department, search } = req.query;
+
+    const where = {};
+
+    // Filter by department slug
+    if (department) {
+      const dept = await prisma.department.findUnique({
+        where: { slug: department },
+        select: { id: true },
+      });
+      if (!dept) return res.json([]); // unknown slug â†’ empty array
+      where.departmentId = dept.id;
+    }
+
+    // Filter by doctor name (case-insensitive contains)
+    if (search) {
+      where.name = { contains: search, mode: "insensitive" };
+    }
+
+    const doctors = await prisma.doctor.findMany({
+      where,
+      orderBy: { name: "asc" },
+      include: { department: { select: { id: true, name: true, slug: true } } },
+    });
+
+    res.json(doctors);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/doctors/:id
+ * Returns a single doctor with their department info
+ */
+export async function getDoctor(req, res, next) {
+  try {
+    const doctor = await prisma.doctor.findUnique({
+      where: { id: req.params.id },
+      include: { department: true },
+    });
+    if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+    res.json(doctor);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/doctors/:id/availability?date=YYYY-MM-DD
+ * Returns booked time slots for the given doctor on a given date
+ * (so the frontend can show unavailable slots)
+ */
+export async function getDoctorAvailability(req, res, next) {
+  try {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ message: "date query param required (YYYY-MM-DD)" });
+
+    const start = new Date(`${date}T00:00:00`);
+    const end   = new Date(`${date}T23:59:59`);
+
+    const booked = await prisma.appointment.findMany({
+      where: {
+        doctorId: req.params.id,
+        status: { notIn: ["CANCELLED"] },
+        appointmentDate: { gte: start, lte: end },
+      },
+      select: { appointmentDate: true, status: true },
+    });
+
+    // Return just the time strings that are booked
+    const bookedSlots = booked.map((a) =>
+      a.appointmentDate.toTimeString().slice(0, 5) // "HH:MM"
+    );
+
+    res.json({ date, doctorId: req.params.id, bookedSlots });
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\controllers\staff.controller.js ====
+
+// src/controllers/staff.controller.js
+import { prisma } from "../prisma.js";
+
+/**
+ * GET /api/staff?type=NURSE|SUPPORT_STAFF&department=ICU
+ * Returns all staff members with optional type/department filtering
+ */
+export async function listStaff(req, res, next) {
+  try {
+    const { type, department } = req.query;
+
+    const where = {};
+    if (type && ["NURSE", "SUPPORT_STAFF"].includes(type.toUpperCase())) {
+      where.type = type.toUpperCase();
+    }
+    if (department) {
+      where.department = { contains: department, mode: "insensitive" };
+    }
+
+    const staff = await prisma.staff.findMany({
+      where,
+      orderBy: { name: "asc" },
+    });
+
+    res.json(staff);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/staff/:id
+ * Returns a single staff member
+ */
+export async function getStaffMember(req, res, next) {
+  try {
+    const member = await prisma.staff.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!member) return res.status(404).json({ message: "Staff member not found" });
+    res.json(member);
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\middleware\auth.js ====
+
+// src/middleware/auth.js
+import jwt from "jsonwebtoken";
+
+/**
+ * Protects routes â€” must have a valid Bearer JWT token.
+ */
+export function requireAuth(req, res, next) {
+  const header = req.headers.authorization;
+
+  if (!header?.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Missing Bearer token" });
+  }
+
+  const token = header.slice("Bearer ".length);
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = payload; // { sub: userId, role, email, iat, exp }
+    next();
+  } catch (err) {
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({ message: "Token expired" });
+    }
+    return res.status(401).json({ message: "Invalid token" });
+  }
+}
+
+/**
+ * Role-based access control.
+ * Usage: requireRole("ADMIN", "RECEPTIONIST")
+ */
+export function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized â€” not authenticated" });
+    }
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({
+        message: `Forbidden â€” requires one of: ${roles.join(", ")}`,
+      });
+    }
+    next();
+  };
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\middleware\errorHandler.js ====
+
+// src/middleware/errorHandler.js
+import { ZodError } from "zod";
+import { Prisma } from "@prisma/client";
+
+export function errorHandler(err, req, res, next) {
+  if (err instanceof ZodError) {
+    return res.status(400).json({ message: "Validation failed", errors: err.flatten() });
+  }
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === "P2002") {
+      return res.status(409).json({ message: "Duplicate value", target: err.meta?.target });
+    }
+    if (err.code === "P2025") {
+      return res.status(404).json({ message: "Record not found" });
+    }
+  }
+  console.error(err);
+  res.status(500).json({ message: "Server error" });
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\routes\appointments.routes.js ====
+
+// src/routes/appointments.routes.js
+import { Router } from "express";
+import {
+  createAppointment,
+  listAppointments,
+  getAppointment,
+  myAppointments,
+  updateAppointmentStatus,
+} from "../controllers/appointments.controller.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
+const router = Router();
+
+// POST /api/appointments â€” requires login
+router.post("/", requireAuth, asyncHandler(createAppointment));
+
+// GET /api/appointments/my â€” logged-in patient's own appointments
+router.get("/my", requireAuth, asyncHandler(myAppointments));
+
+// GET /api/appointments â€” admin/receptionist only, supports ?status=&doctorId=&date=
+router.get(
+  "/",
+  requireAuth,
+  requireRole("ADMIN", "RECEPTIONIST"),
+  asyncHandler(listAppointments)
+);
+
+// GET /api/appointments/:id â€” admin/receptionist only
+router.get(
+  "/:id",
+  requireAuth,
+  requireRole("ADMIN", "RECEPTIONIST"),
+  asyncHandler(getAppointment)
+);
+
+// PATCH /api/appointments/:id/status â€” admin/receptionist only
+router.patch(
+  "/:id/status",
+  requireAuth,
+  requireRole("ADMIN", "RECEPTIONIST"),
+  asyncHandler(updateAppointmentStatus)
+);
+
+export default router;
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\routes\auth.routes.js ====
+
+// src/routes/auth.routes.js
+import { Router } from "express";
+import { register, login, me } from "../controllers/auth.controller.js";
+import { requireAuth } from "../middleware/auth.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
+const router = Router();
+
+// POST /api/auth/register
+router.post("/register", asyncHandler(register));
+
+// POST /api/auth/login
+router.post("/login", asyncHandler(login));
+
+// GET /api/auth/me  (protected)
+router.get("/me", requireAuth, asyncHandler(me));
+
+export default router;
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\routes\departments.routes.js ====
+
+// src/routes/departments.routes.js
+import { Router } from "express";
+import {
+  listDepartments,
+  getDepartmentBySlug,
+  listDoctorsByDepartment,
+} from "../controllers/departments.controller.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
+const router = Router();
+
+// GET /api/departments
+router.get("/", asyncHandler(listDepartments));
+
+// GET /api/departments/:slug
+router.get("/:slug", asyncHandler(getDepartmentBySlug));
+
+// GET /api/departments/:slug/doctors
+router.get("/:slug/doctors", asyncHandler(listDoctorsByDepartment));
+
+export default router;
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\routes\doctors.routes.js ====
+
+// src/routes/doctors.routes.js
+import { Router } from "express";
+import {
+  listDoctors,
+  getDoctor,
+  getDoctorAvailability,
+} from "../controllers/doctors.controller.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
+const router = Router();
+
+// GET /api/doctors?department=cardiology&search=sharma
+router.get("/", asyncHandler(listDoctors));
+
+// GET /api/doctors/:id
+router.get("/:id", asyncHandler(getDoctor));
+
+// GET /api/doctors/:id/availability?date=2026-07-01
+router.get("/:id/availability", asyncHandler(getDoctorAvailability));
+
+export default router;
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\routes\staff.routes.js ====
+
+// src/routes/staff.routes.js
+import { Router } from "express";
+import { listStaff, getStaffMember } from "../controllers/staff.controller.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
+const router = Router();
+
+// GET /api/staff?type=NURSE&department=ICU
+router.get("/", asyncHandler(listStaff));
+
+// GET /api/staff/:id
+router.get("/:id", asyncHandler(getStaffMember));
+
+export default router;
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\utils\asyncHandler.js ====
+
+export const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\utils\validators.js ====
+
+// src/utils/validators.js
+import { z } from "zod";
+
+export const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
+
+export const registerSchema = z.object({
+  name: z.string().min(2, "Name too short"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  phone: z.string().regex(/^[6-9]\d{9}$/, "Invalid Indian phone number").optional(),
+  role: z.enum(["PATIENT", "ADMIN", "RECEPTIONIST", "DOCTOR"]).default("PATIENT"),
+});
+
+export const appointmentSchema = z.object({
+  doctorId: z.string().uuid("Invalid doctor ID"),
+  fullName: z.string().min(3, "Name too short"),
+  dob: z.string().min(1, "Date of birth required"),
+  gender: z.enum(["Male", "Female", "Other"]),
+  bloodGroup: z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]),
+  phone: z.string().regex(/^[6-9]\d{9}$/, "Invalid 10-digit mobile number"),
+  email: z.string().email().optional().or(z.literal("")),
+  address: z.string().min(3, "Address required"),
+  city: z.string().min(2, "City required"),
+  pincode: z.string().regex(/^\d{6}$/, "Invalid 6-digit pincode"),
+  emergencyName: z.string().min(3, "Emergency contact name required"),
+  emergencyPhone: z.string().regex(/^[6-9]\d{9}$/, "Invalid emergency phone"),
+  symptoms: z.string().min(3, "Please describe your symptoms"),
+  allergies: z.string().optional(),
+  history: z.string().optional(),
+  appointmentDate: z.string().min(1, "Appointment date required"),
+  appointmentTime: z.string().min(1, "Appointment time required"),
+}).refine(
+  (d) => d.emergencyPhone !== d.phone,
+  { message: "Emergency phone must differ from your number", path: ["emergencyPhone"] }
+);
+
+export const statusSchema = z.object({
+  status: z.enum(["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"]),
+});
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\app.js ====
+
+// src/app.js
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import "dotenv/config";
+
+import authRoutes        from "./routes/auth.routes.js";
+import departmentsRoutes from "./routes/departments.routes.js";
+import doctorsRoutes     from "./routes/doctors.routes.js";
+import staffRoutes       from "./routes/staff.routes.js";
+import appointmentsRoutes from "./routes/appointments.routes.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+
+export const app = express();
+
+// â”€â”€â”€ Security Middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.use(helmet());
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// â”€â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  credentials: true,
+}));
+
+// â”€â”€â”€ Body Parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// â”€â”€â”€ Health Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.get("/health", (_req, res) => res.json({ ok: true, time: new Date() }));
+
+// â”€â”€â”€ Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.use("/api/auth",         authRoutes);
+app.use("/api/departments",  departmentsRoutes);
+app.use("/api/doctors",      doctorsRoutes);
+app.use("/api/staff",        staffRoutes);
+app.use("/api/appointments", appointmentsRoutes);
+
+// 404 handler
+app.use((_req, res) => res.status(404).json({ message: "Route not found" }));
+
+// â”€â”€â”€ Global Error Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.use(errorHandler);
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\prisma.js ====
+
+// src/prisma.js
+import { PrismaClient } from "@prisma/client";
+
+export const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === "development" ? ["query", "error"] : ["error"],
+});
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\src\server.js ====
+
+// src/server.js
+import "dotenv/config";
+import { app } from "./app.js";
+import { prisma } from "./prisma.js";
+
+const PORT = process.env.PORT || 4000;
+
+async function bootstrap() {
+  try {
+    // Test DB connection
+    await prisma.$connect();
+    console.log("âœ… Database connected");
+
+    app.listen(PORT, () => {
+      console.log(`ðŸš€ Pulse Backend running at http://localhost:${PORT}`);
+      console.log(`   Health: http://localhost:${PORT}/health`);
+    });
+  } catch (err) {
+    console.error("âŒ Failed to connect to database:", err.message);
+    process.exit(1);
+  }
+}
+
+bootstrap();
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\.env ====
+
+# â”€â”€â”€ Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+PORT=4000
+NODE_ENV=development
+
+# â”€â”€â”€ PostgreSQL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+DATABASE_URL="postgresql://postgres:B8hA_H6-9%2AxNy%21B@db.iwqjziuubpozxfpuswho.supabase.co:6543/postgres?pgbouncer=true&connection_limit=1"
+
+# â”€â”€â”€ JWT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+JWT_SECRET=change_me_long_random
+JWT_EXPIRES_IN=7d
+
+# â”€â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+FRONTEND_URL=http://localhost:5173
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\.env.example ====
+
+# â”€â”€â”€ Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+PORT=4000
+NODE_ENV=development
+
+# â”€â”€â”€ PostgreSQL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+DATABASE_URL="postgresql://user:pass@localhost:5432/pulse?schema=public"
+
+# â”€â”€â”€ JWT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+JWT_SECRET=change_me_long_random
+JWT_EXPIRES_IN=7d
+
+# â”€â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+FRONTEND_URL=http://localhost:5173
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\package.json ====
+
+{
+  "name": "pulse-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Backend for Pulse Life Care Hospital â€“ Express + Prisma + PostgreSQL",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "prisma:gen": "prisma generate",
+    "prisma:migrate": "prisma migrate dev --name init",
+    "prisma:studio": "prisma studio",
+    "seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "prisma": "^6.0.0"
+  }
+}
+
+
+
+==== C:\Users\Jenil\OneDrive\Desktop\new\backend\README.md ====
+
+# ðŸ¥ Pulse Life Care Hospital â€” Backend API
+
+Node.js + Express + PostgreSQL + Prisma + JWT
+
+---
+
+## ðŸš€ How to Run (Step by Step)
+
+### Prerequisites
+- Node.js v18+
+- PostgreSQL 14+ installed and running locally
+
+---
+
+### Step 1 â€” Open terminal in the backend folder
+
+```bash
+cd pulse-backend
+```
+
+### Step 2 â€” Install dependencies
+
+```bash
+npm install
+```
+
+### Step 3 â€” Set up your database credentials
+
+Edit the `.env` file and update:
+
+```env
+DATABASE_URL="postgresql://postgres:YOUR_POSTGRES_PASSWORD@localhost:5432/pulse_db?schema=public"
+JWT_SECRET=change_this_to_a_long_random_string
+```
+
+> ðŸ’¡ Create the database first in psql:  `CREATE DATABASE pulse_db;`
+
+### Step 4 â€” Generate Prisma client
+
+```bash
+npm run prisma:gen
+```
+
+### Step 5 â€” Run migrations (creates all tables)
+
+```bash
+npm run prisma:migrate
+```
+
+### Step 6 â€” Seed the database (inserts all doctors, departments, staff, admin user)
+
+```bash
+npm run seed
+```
+
+Seeded credentials:
+| Role    | Email                   | Password     |
+|---------|-------------------------|--------------|
+| Admin   | admin@pulselife.com     | admin123     |
+| Patient | patient@example.com     | patient123   |
+
+### Step 7 â€” Start the dev server
+
+```bash
+npm run dev
+```
+
+Server runs at: **http://localhost:4000**
+
+Health check: http://localhost:4000/health
+
+---
+
+## ðŸ“‚ Project Structure
+
+```
+pulse-backend/
+â”œâ”€â”€ prisma/
+â”‚   â”œâ”€â”€ schema.prisma        # Database models
+â”‚   â””â”€â”€ seed.js              # Sample data seeder
+â”œâ”€â”€ src/
+â”‚   â”œâ”€â”€ app.js               # Express app + middleware
+â”‚   â”œâ”€â”€ server.js            # Entry point, DB connect
+â”‚   â”œâ”€â”€ prisma.js            # Prisma client singleton
+â”‚   â”œâ”€â”€ routes/
+â”‚   â”‚   â”œâ”€â”€ auth.routes.js
+â”‚   â”‚   â”œâ”€â”€ departments.routes.js
+â”‚   â”‚   â”œâ”€â”€ doctors.routes.js
+â”‚   â”‚   â”œâ”€â”€ staff.routes.js
+â”‚   â”‚   â””â”€â”€ appointments.routes.js
+â”‚   â”œâ”€â”€ controllers/
+â”‚   â”‚   â”œâ”€â”€ auth.controller.js
+â”‚   â”‚   â”œâ”€â”€ departments.controller.js
+â”‚   â”‚   â”œâ”€â”€ doctors.controller.js
+â”‚   â”‚   â”œâ”€â”€ staff.controller.js
+â”‚   â”‚   â””â”€â”€ appointments.controller.js
+â”‚   â”œâ”€â”€ middleware/
+â”‚   â”‚   â”œâ”€â”€ auth.js          # JWT requireAuth + requireRole
+â”‚   â”‚   â””â”€â”€ errorHandler.js  # Global error handler
+â”‚   â””â”€â”€ utils/
+â”‚       â””â”€â”€ validators.js    # Zod schemas
+â”œâ”€â”€ .env
+â”œâ”€â”€ .env.example
+â””â”€â”€ package.json
+```
+
+---
+
+## ðŸ”Œ API Endpoints Reference
+
+### Auth
+| Method | Endpoint           | Access  | Description              |
+|--------|--------------------|---------|--------------------------|
+| POST   | /api/auth/register | Public  | Create a new account     |
+| POST   | /api/auth/login    | Public  | Login â†’ returns JWT      |
+| GET    | /api/auth/me       | JWT     | Get current user profile |
+
+### Departments
+| Method | Endpoint                         | Access | Description                    |
+|--------|----------------------------------|--------|--------------------------------|
+| GET    | /api/departments                 | Public | All departments                |
+| GET    | /api/departments/:slug           | Public | Single department              |
+| GET    | /api/departments/:slug/doctors   | Public | Doctors in a department        |
+
+### Doctors
+| Method | Endpoint                              | Access | Description                        |
+|--------|---------------------------------------|--------|------------------------------------|
+| GET    | /api/doctors                          | Public | All doctors (filter: ?department=slug&search=name) |
+| GET    | /api/doctors/:id                      | Public | Single doctor                      |
+| GET    | /api/doctors/:id/availability?date=   | Public | Booked time slots for a date       |
+
+### Staff
+| Method | Endpoint             | Access | Description                          |
+|--------|----------------------|--------|--------------------------------------|
+| GET    | /api/staff           | Public | All staff (?type=NURSE&department=)  |
+| GET    | /api/staff/:id       | Public | Single staff member                  |
+
+### Appointments
+| Method | Endpoint                        | Access                    | Description                |
+|--------|---------------------------------|---------------------------|----------------------------|
+| POST   | /api/appointments               | JWT (any logged-in user)  | Book an appointment        |
+| GET    | /api/appointments/my            | JWT (patient)             | My own appointments        |
+| GET    | /api/appointments               | JWT (ADMIN, RECEPTIONIST) | All appointments (admin)   |
+| GET    | /api/appointments/:id           | JWT (ADMIN, RECEPTIONIST) | Single appointment         |
+| PATCH  | /api/appointments/:id/status    | JWT (ADMIN, RECEPTIONIST) | Update status              |
+
+---
+
+## âš›ï¸ Frontend Integration (React Changes)
+
+### 1. Login â€” store token instead of `isAuthenticated`
+
+In your `LoginPage.jsx` after successful login:
+
+```js
+const res = await fetch("http://localhost:4000/api/auth/login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email, password }),
+});
+const data = await res.json();
+
+if (res.ok) {
+  localStorage.setItem("token", data.token);        // store JWT
+  localStorage.setItem("user", JSON.stringify(data.user));
+  localStorage.setItem("isAuthenticated", "true");  // keep existing guard working
+  navigate("/dashboard");
+}
+```
+
+### 2. Replace hardcoded DOCTORS_DATA
+
+In `DoctorsPage.jsx`, replace the static array with:
+
+```js
+const [doctors, setDoctors] = useState([]);
+
+useEffect(() => {
+  fetch("http://localhost:4000/api/doctors")
+    .then(r => r.json())
+    .then(setDoctors);
+}, []);
+```
+
+### 3. Replace hardcoded SPECIALITIES (for SpecialitiesPage)
+
+```js
+useEffect(() => {
+  fetch("http://localhost:4000/api/departments")
+    .then(r => r.json())
+    .then(setDepartments);
+}, []);
+```
+
+Click on body part â†’ fetch that department's doctors:
+```js
+fetch(`http://localhost:4000/api/departments/${slug}/doctors`)
+  .then(r => r.json())
+  .then(data => setDoctorsForModal(data.doctors));
+```
+
+### 4. Replace booking console.log() with POST
+
+In your booking form `handleSubmit`:
+
+```js
+const token = localStorage.getItem("token");
+if (!token) { navigate("/login"); return; }
+
+const res = await fetch("http://localhost:4000/api/appointments", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`,
+  },
+  body: JSON.stringify({
+    doctorId: doctor.id,
+    fullName:       form.fullName,
+    dob:            form.dob,
+    gender:         form.gender,
+    bloodGroup:     form.bloodGroup,
+    phone:          form.phone,
+    email:          form.email,
+    address:        form.address,
+    city:           form.city,
+    pincode:        form.pincode,
+    emergencyName:  form.emergencyName,
+    emergencyPhone: form.emergencyPhone,
+    symptoms:       form.symptoms,
+    appointmentDate: form.appointmentDate,
+    appointmentTime: form.appointmentTime,
+  }),
+});
+
+if (res.ok) {
+  setSubmitted(true); // show success screen
+} else {
+  const err = await res.json();
+  alert(err.message); // e.g. "Slot already booked"
+}
+```
+
+### 5. Update ProtectedRoute in App.jsx
+
+Your existing check `localStorage.getItem('isAuthenticated') === 'true'` still works.
+For stronger security, additionally verify the token is present:
+
+```js
+const ProtectedRoute = ({ children }) => {
+  const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+  const token = localStorage.getItem('token');
+  if (!isAuthenticated || !token) return <Navigate to="/login" replace />;
+  return children;
+};
+```
+
+---
+
+## ðŸ”§ Useful Prisma Commands
+
+```bash
+# Open Prisma Studio (visual DB browser)
+npm run prisma:studio
+
+# Reset DB and re-run migrations (destroys all data!)
+npx prisma migrate reset
+
+# View migration history
+npx prisma migrate status
+```
+
+
+
